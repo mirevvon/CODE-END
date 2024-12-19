@@ -1,0 +1,974 @@
+import tkinter as tk
+from tkinter import messagebox, ttk # Для отображения сообщений
+import sqlite3 # Для работы с базами данных SQLite
+import hashlib # Для хеширования данных (паролей)
+import pandas as pd # Для анализа данных и работы с таблицами (DataFrame)
+
+class PassengerApp:
+    def __init__(self, root): #корень окна
+        self.root = root # Устанавливаем текущую тему
+        self.current_theme = "light"  #Переменная для хранения типа пользователя (admin или user)
+        self.user_type = tk.StringVar(value="admin") # Цвет фона для светлой темы
+        self.theme_color = "#f0f0f0" # Подключение к базе данных пассажиров
+        self.passenger_db = sqlite3.connect('passengers.db') # Подключение к базе данных администраторов
+        self.admin_db = sqlite3.connect('admin.db') # Подключение к базе данных менеджеров
+        self.manager_db = sqlite3.connect('managers.db')
+        self.create_databases() # Создаем базы данных и таблицы
+        self.create_login_window() # Создаем окно авторизации
+
+
+    def set_theme(self, theme):
+        if theme == "light":  # Устанавливаем цветовую тему приложения
+            self.root.config(bg="#f0f0f0")
+            self.theme_color = "#f0f0f0"
+        else:
+            self.root.config(bg="#333333")
+            self.theme_color = "#444444"
+
+    def create_databases(self): # Создаем и инициализируем базы данных и таблицы
+        self.passenger_db = sqlite3.connect('passengers.db')
+        self.admin_db = sqlite3.connect('admin.db')
+        self.manager_db = sqlite3.connect('managers.db')
+
+        passenger_cursor = self.passenger_db.cursor()
+
+        # Создание таблицы пассажиров
+        passenger_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS passengers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fullname VARCHAR(255),
+                birthdate DATE,
+                phone VARCHAR(20),
+                email VARCHAR(255) UNIQUE,
+                passport VARCHAR(50),
+                status VARCHAR(20),
+                origin VARCHAR(100),
+                destination VARCHAR(100),
+                departure_date DATE,
+                flight_class VARCHAR(20),
+                flight_id INTEGER,
+                added_by_manager_id INTEGER,
+                added_by_admin_id INTEGER,
+                FOREIGN KEY (flight_id) REFERENCES flights (id),
+                FOREIGN KEY (added_by_manager_id) REFERENCES managers (userid),
+                FOREIGN KEY (added_by_admin_id) REFERENCES admins (userid)
+            )
+        ''')
+
+        # Создание таблицы рейсов
+        passenger_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS flights (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                flight_number VARCHAR(20),
+                departure_time TIME,
+                arrival_time TIME,
+                origin VARCHAR(255),
+                destination VARCHAR(255),
+                status VARCHAR(50),
+                created_by_admin_id INTEGER,
+                created_by_manager_id INTEGER,
+                FOREIGN KEY (created_by_manager_id) REFERENCES managers (userid)
+                FOREIGN KEY (origin) REFERENCES cities(id),
+                FOREIGN KEY (destination) REFERENCES cities(id)
+            )
+        ''')
+
+        self.passenger_db.commit()
+
+        admin_cursor = self.admin_db.cursor()
+        admin_cursor.execute('''
+            CREATE TABLE IF NOT EXISTS admins (
+                userid INTEGER PRIMARY KEY AUTOINCREMENT,
+                username VARCHAR(255) UNIQUE,
+                password VARCHAR(255)
+            )
+        ''')
+        self.admin_db.commit() # Сохраняем изменения в базе данных администраторов
+
+        manager_cursor = self.manager_db.cursor()
+        manager_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS managers (
+                    userid INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username VARCHAR(255) UNIQUE,
+                    password VARCHAR(255)
+                )
+            ''')
+        self.manager_db.commit() # Сохраняем изменения в базе данных менеджеров
+
+
+        passenger_cursor.execute('''
+                CREATE TABLE IF NOT EXISTS cities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    city_name VARCHAR(255) NOT NULL,
+                    country_name VARCHAR(255) NOT NULL
+                )
+            ''')
+
+        # Начальное заполнение таблицы менеджеров и администраторов
+        manager_cursor.execute('SELECT * FROM managers')
+        if manager_cursor.fetchone() is None: # Если таблица менеджеров пуста
+            manager_cursor.execute("INSERT INTO managers (username, password) VALUES (?, ?)",
+                                   ("manager", self.hash_password("manager123")))
+            self.manager_db.commit() # Сохраняем изменения
+
+            admin_cursor.execute('SELECT * FROM admins')
+            if admin_cursor.fetchone() is None: # Если таблица администраторов пуста
+                admin_cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)",
+                                     ("admin", self.hash_password("admin123")))
+                self.admin_db.commit() # Сохраняем изменения
+
+            # Начальное заполнение таблицы рейсов
+            passenger_cursor.execute('SELECT * FROM flights')
+            if passenger_cursor.fetchone() is None:
+                flights_data = [
+                    ("1", "10:00", "12:00", "Москва", "Санкт-Петербург", "Вылетел"),
+                    ("2", "14:00", "16:30", "Казань", "Екатеринбург", "Вылетел"),
+                    ("3", "09:15", "11:45", "Казань", "Сочи", "Запланирован"),
+                    ("4", "13:30", "15:30", "Ростов-на-Дону", "Владивосток", "Запланирован"),
+                    ("5", "17:00", "19:05", "Екатеринбург", "Москва", "Отменён"),
+                    ("6", "11:00", "13:00", "Москва", "Уфа", "Вылетел"),
+                    ("7", "15:45", "18:00", "Санкт-Петербург", "Калуга", "Запланирован"),
+                    ("8", "19:30", "21:30", "Челябинск", "Иркутск", "Вылетел"),
+                    ("9", "08:00", "09:30", "Ижевск", "Белгород", "Запланирован"),
+                ]
+
+                passenger_cursor.executemany('''
+                    INSERT INTO flights (flight_number, departure_time, arrival_time, origin, destination, status)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                ''', flights_data)
+                self.passenger_db.commit() # Сохраняем изменения
+        # Начальное заполнение таблицы пассажиров
+        passenger_cursor.execute('SELECT * FROM passengers')
+        if passenger_cursor.fetchone() is None:
+            # Добавляем тестовых пассажиров
+            sample_passengers = [
+                ("Иванов Иван Иванович", "1990-01-01", "+79001234567", "ivanov@example.com",
+                 "1234567890", "Бронзовый", "Москва", "Санкт-Петербург", "2024-12-15", "Эконом", 1),
+                ("Петров Петр Петрович", "1985-05-05", "+79001234568", "petrov@example.com",
+                 "9876543210", "Серебряный", "Казань", "Екатеринбург", "2024-12-15", "Бизнес", 2),
+                ("Смирнов Алексей Викторович", "1992-11-30", "+79019876543", "smirnov@example.com",
+                 "2468135790", "Серебряный", "Казань", "Сочи", "2023-12-17", "Эконом", 3),
+                ("Кузнецова Анна Сергеевна", "1995-07-18", "+79020001234", "kuznetsova@example.com",
+                 "1357246801", "Бронзовый", "Ростов-на-Дону", "Владивосток", "2023-12-18", "Эконом", 4),
+                ("Волков Сергей Николаевич", "1988-10-05", "+79013456789", "volkov@example.com",
+                 "3210987654", "Золотой", "Екатеринбург", "Москва", "2023-12-19", "Бизнес", 5),
+                ("Григорьев Костя Андреевич", "1991-12-28", "+79001234567", "grigoryev@example.com",
+                 "6543210987", "Серебряный", "Москва", "Уфа", "2023-12-19", "Эконом", 6),
+                ("Федорова Ирина Васильевна", "1984-08-14", "+79022334455", "fedorova@example.com",
+                 "9876543219", "Бронзовый", "Санкт-Петербург", "Калуга", "2023-12-21", "Эконом", 7),
+                ("Баранов Матвей Романович", "1993-09-03", "+79033445566", "baranov@example.com",
+                 "4321876543", "Золотой", "Челябинск", "Иркутск", "2023-12-22", "Бизнес", 8),
+                ("Лебедева Елена Александровна", "1996-06-10", "+79035557788", "lebedova@example.com",
+                 "8765432198", "Серебряный", "Ижевск", "Белгород", "2024-12-23", "Эконом", 9),
+            ]
+            passenger_cursor.executemany("INSERT INTO passengers (fullname, birthdate, phone, email, passport, status, "
+                                         "origin, destination, departure_date, flight_class, flight_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                                         sample_passengers)
+            self.passenger_db.commit()
+
+    @staticmethod
+    def hash_password(password):
+        # Хэшируем пароль с использованием SHA-256
+        return hashlib.sha256(password.encode()).hexdigest()
+
+    def create_login_window(self):
+        print("Creating login window")
+        self.login_window = tk.Toplevel(self.root)
+        self.login_window.title("Логин администратора")
+        self.login_window.geometry("500x500")
+        self.login_window.config(bg=self.theme_color) # Устанавливаем цвет темы
+
+        tk.Label(self.login_window, text="Выберите уровень доступа", bg=self.theme_color, font=('Arial', 12)).pack(
+            pady=10)
+
+        # Кнопки выбора уровня доступа
+        radio_admin = tk.Radiobutton(self.login_window, text="Администратор", variable=self.user_type, value="admin",
+                                     bg=self.theme_color, font=('Arial', 12))
+        radio_user = tk.Radiobutton(self.login_window, text="Менеджер", variable=self.user_type, value="user",
+                                    bg=self.theme_color, font=('Arial', 12))
+
+        radio_admin.pack(pady=5)
+        radio_user.pack(pady=5)
+
+        # Поля ввода для логина и пароля
+        self.username_entry = tk.Entry(self.login_window, font=('Arial', 12), bg="#eaeaea")
+        self.username_entry.pack(pady=5)
+        self.username_entry.insert(0, "Логин")
+
+        self.password_entry = tk.Entry(self.login_window, show='*', font=('Arial', 12), bg="#eaeaea")
+        self.password_entry.pack(pady=5)
+        self.password_entry.insert(0, "Пароль")
+
+        # Кнопка входа
+        login_button = tk.Button(self.login_window, text="Войти", command=self.login, bg="#4CAF50", fg="white",
+                                 font=('Arial', 12))
+        login_button.pack(pady=20)
+        # Кнопки для добавления новых пользователей
+        self.add_user_button = tk.Button(self.login_window, text="Добавить администратора",
+                                         command=self.add_admin_window,
+                                         bg="#FFA500", fg="white", font=('Arial', 12))
+        self.add_user_button.pack(pady=10)
+
+        self.add_manager_button = tk.Button(self.login_window, text="Добавить менеджера",
+                                            command=self.add_manager_window,
+                                            bg="#FFA500", fg="white", font=('Arial', 12))
+        self.add_manager_button.pack(pady=10)
+
+    def add_admin_window(self):
+        # Открываем окно добавления администратора
+        self.open_add_user_window("admin")
+
+    def add_manager_window(self):
+        # Открываем окно добавления менеджера
+        self.open_add_user_window("user")
+
+    def open_add_user_window(self, user_type):
+        # Общая функция для открытия окна добавления пользователя
+        window = tk.Toplevel(self.login_window)
+        window.title("Добавить менеджера" if user_type == "user" else "Добавить администратора")
+        window.config(bg=self.theme_color)
+
+        # Метки и поля для ввода логина и пароля
+        tk.Label(window, text="Логин", bg=self.theme_color, font=('Arial', 12)).grid(row=0, column=0, pady=10)
+        tk.Label(window, text="Пароль", bg=self.theme_color, font=('Arial', 12)).grid(row=1, column=0, pady=10)
+
+        new_username_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        new_password_entry = tk.Entry(window, show='*', font=('Arial', 12), bg="#eaeaea")
+
+        new_username_entry.grid(row=0, column=1, pady=5)
+        new_password_entry.grid(row=1, column=1, pady=5)
+        # Кнопка для сохранения нового пользователя
+        save_button = tk.Button(window, text="Сохранить",
+                                command=lambda: self.save_user(user_type, new_username_entry, new_password_entry),
+                                bg="#4CAF50", fg="white", font=('Arial', 12))
+        save_button.grid(row=2, column=0, columnspan=2, pady=20)
+        # Кнопка для закрытия окна
+        back_button = tk.Button(window, text="Назад", command=window.destroy, bg="#FF0000", fg="white",
+                                font=('Arial', 12))
+        back_button.grid(row=3, column=0, columnspan=2, pady=10)
+
+    def save_user(self, user_type, username_entry, password_entry):
+        # Сохранение нового пользователя в соответствующей базе данных
+        username = username_entry.get()
+        password = password_entry.get()
+
+        if username and password:
+            cursor = self.admin_db.cursor()
+            try:
+                if user_type == "admin":
+                    cursor.execute("INSERT INTO admins (username, password) VALUES (?, ?)",
+                                   (username, self.hash_password(password)))
+                else:  # Это менеджер
+                    cursor.execute("INSERT INTO managers (username, password) VALUES (?, ?)",
+                                   (username, self.hash_password(password)))
+
+                self.admin_db.commit()# Сохраняем изменения
+                messagebox.showinfo("Успех",
+                                    "Пользователь добавлен!" if user_type == "user" else "Администратор добавлен!")
+                username_entry.delete(0, tk.END)# Очищаем поле логина
+                password_entry.delete(0, tk.END)# Очищаем поле пароля
+            except sqlite3.IntegrityError:
+                messagebox.showerror("Ошибка", "Этот логин уже существует.")
+            except Exception as e: # Ошибка, если логин уже занят
+                messagebox.showerror("Ошибка", f"Произошла ошибка: {e}")
+        else:
+            messagebox.showerror("Ошибка", "Пожалуйста, введите логин и пароль.") # Если поля пустые
+
+    def login(self):
+        # Проверка введенных логина и пароля
+        username = self.username_entry.get()
+        password = self.password_entry.get() # Получаем введенные логин и пароль
+        hashed_password = self.hash_password(password)
+        #Хэшируем введенный пароль для сравнения с сохраненными паролями в базе данных
+
+        # Проверка роли пользователя
+        if self.user_type.get() == "admin":
+            admin_cursor = self.admin_db.cursor()
+            admin_cursor.execute("SELECT * FROM admins WHERE username=? AND password=?", (username, hashed_password))
+            result = admin_cursor.fetchone()
+        elif self.user_type.get() == "user":
+            manager_cursor = self.manager_db.cursor()
+            manager_cursor.execute("SELECT * FROM managers WHERE username=? AND password=?",
+                                   (username, hashed_password))
+            result = manager_cursor.fetchone() # Получаем результат из базы данных
+        else:
+            messagebox.showerror("Ошибка", "Неверный тип пользователя.")
+            return
+
+        if result:
+            self.login_window.destroy()  # Закрываем окно входа
+            self.show_main_window()  # Показать главное окно после успешного входа
+        else:
+            messagebox.showerror("Ошибка", "Неверный логин или пароль")
+
+    def add_manager_window(self):
+        # Открываем окно добавления менеджера
+        self.open_add_user_window("user")  # Параметр "user" будет означать создание менеджера
+
+    def save_user(self, user_type, username_entry, password_entry):
+        # Сохранение нового пользователя в соответствующей базе данных
+        username = username_entry.get()
+        password = password_entry.get()
+
+        if username and password:
+            cursor = self.manager_db.cursor() if user_type == "user" else self.admin_db.cursor()  # Использовать соответствующую БД
+            try:
+                cursor.execute("INSERT INTO managers (username, password) VALUES (?, ?)",
+                               (username, self.hash_password(password)))  # Добавляем менеджера
+                self.manager_db.commit()
+                messagebox.showinfo("Успех", "Менеджер добавлен!")
+                username_entry.delete(0, tk.END)
+                password_entry.delete(0, tk.END)
+            except sqlite3.IntegrityError:
+                messagebox.showerror("Ошибка", "Этот логин уже существует.")
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Произошла ошибка: {e}")
+        else:
+            messagebox.showerror("Ошибка", "Пожалуйста, введите логин и пароль.")
+
+    def show_main_window(self):
+        self.root.deiconify()  # Показать главное окно
+        self.root.title("Система учета и анализа данных о пассажирах")
+        self.root.geometry("800x600")
+        self.set_theme(self.current_theme)  # Установить тему
+        self.create_menu()
+        self.create_search_bar()
+
+        self.create_passenger_tab()
+        self.create_flight_tab()  # Создать вкладку рейсов
+
+    def back_to_login(self):
+        self.root.withdraw()  # Скрыть главное окно
+        self.create_login_window()  # Вновь открыть окно логина
+
+    def create_menu(self):
+        menu = tk.Menu(self.root)
+        self.root.config(menu=menu)
+
+        passenger_menu = tk.Menu(menu)
+        menu.add_cascade(label="Учет пассажиров", menu=passenger_menu)
+
+        # Добавление кнопки "Просмотреть пассажиров" для всех пользователей
+        passenger_menu.add_command(label="Просмотреть пассажиров", command=self.view_passengers_window)
+
+        if self.user_type.get() == "admin":
+            passenger_menu.add_command(label="Добавить пассажира", command=self.add_passenger_window)
+            passenger_menu.add_command(label="Экспорт в Excel", command=self.export_passenger_data)
+
+        flight_menu = tk.Menu(menu)
+        menu.add_cascade(label="Управление рейсами", menu=flight_menu)
+        flight_menu.add_command(label="Просмотреть рейсы", command=self.view_flights_window)
+
+        if self.user_type.get() == "admin":
+            flight_menu.add_command(label="Добавить рейс", command=self.add_flight_window)
+
+        analytics_menu = tk.Menu(menu)
+        menu.add_cascade(label="Аналитика", menu=analytics_menu)
+        analytics_menu.add_command(label="Статистика по пассажирам", command=self.passenger_statistics)
+
+        reports_menu = tk.Menu(menu)
+        menu.add_cascade(label="Отчеты", menu=reports_menu)
+        reports_menu.add_command(label="Просмотреть отчеты", command=self.reports_window)
+        reports_menu.add_command(label="Генерировать отчет", command=self.generate_report_window)
+
+        settings_menu = tk.Menu(menu)
+        menu.add_cascade(label="Настройки", menu=settings_menu)
+        if self.user_type.get() == "admin":
+            settings_menu.add_command(label="Сменить тему", command=self.toggle_theme)
+
+        self.root.geometry("1500x1500")  # Увеличение размеров главного окна
+
+    def view_passengers_window(self):
+        # Окно для просмотра списка пассажиров
+        window = tk.Toplevel(self.root)
+        window.title("Список пассажиров")
+        window.config(bg=self.theme_color)
+        # Создание таблицы для отображения пассажиров
+        passenger_tree = ttk.Treeview(window, columns=("FullName", "BirthDate", "Phone", "Email", "Passport", "Status",
+                                                       "Origin", "Destination", "DepartureDate", "FlightClass"),
+                                      show='headings')
+        passenger_tree.heading("FullName", text="ФИО")
+        passenger_tree.heading("BirthDate", text="Дата рождения")
+        passenger_tree.heading("Phone", text="Номер телефона")
+        passenger_tree.heading("Email", text="Email")
+        passenger_tree.heading("Passport", text="Номер паспорта")
+        passenger_tree.heading("Status", text="Статус членства")
+        passenger_tree.heading("Origin", text="Город/страна отправления")
+        passenger_tree.heading("Destination", text="Город/страна назначения")
+        passenger_tree.heading("DepartureDate", text="Дата вылета")
+        passenger_tree.heading("FlightClass", text="Класс")
+
+        passenger_tree.tag_configure('evenrow', background="#d9f0d9")  # Color for even rows
+        passenger_tree.tag_configure('oddrow', background="#ffffff")  # Color for odd rows
+        passenger_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Загрузка данных пассажиров в таблицу
+        self.load_passenger_data_view(passenger_tree)
+        # Кнопка для закрытия окна
+        close_button = tk.Button(window, text="Закрыть", command=window.destroy, bg="#FF0000", fg="white",
+                                 font=('Arial', 12))
+        close_button.pack(pady=10)
+
+    def view_flights_window(self):
+        # Метод для создания окна просмотра рейсов
+        window = tk.Toplevel(self.root) # Создаем новое окно
+        window.title("Список рейсов") # Заголовок окна
+        window.config(bg=self.theme_color) # Устанавливаем цвет фона
+        # Создаем дерево для отображения информации о рейсах
+        flight_tree = ttk.Treeview(window, columns=("FlightNumber", "DepartureTime", "ArrivalTime", "Origin",
+                                                    "Destination", "Status"), show='headings')
+        flight_tree.heading("FlightNumber", text="Номер рейса")
+        flight_tree.heading("DepartureTime", text="Время вылета")
+        flight_tree.heading("ArrivalTime", text="Время прилета")
+        flight_tree.heading("Origin", text="Пункт отправления")
+        flight_tree.heading("Destination", text="Пункт назначения")
+        flight_tree.heading("Status", text="Статус рейса")
+        # Задаем цвет для четных и нечетных строк
+        flight_tree.tag_configure('evenrow', background="#d9f0d9")  # Цвет для четных строк
+        flight_tree.tag_configure('oddrow', background="#ffffff")  # Цвет для нечетных строк
+        flight_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Загрузка данных рейсов в таблицу
+        self.load_flight_data_view(flight_tree)
+
+        close_button = tk.Button(window, text="Закрыть", command=window.destroy, bg="#FF0000", fg="white",
+                                 font=('Arial', 12))
+        close_button.pack(pady=10)
+
+    # Метод для загрузки данных о рейсах в дерево
+    def load_flight_data_view(self, flight_tree):
+        flight_cursor = self.passenger_db.cursor()
+        flight_cursor.execute("SELECT * FROM flights")
+        for index, flight in enumerate(flight_cursor.fetchall()):
+            tag = 'evenrow' if index % 2 == 0 else 'oddrow'
+            flight_tree.insert("", "end", values=flight[1:], tags=(tag,))
+
+    # Метод для загрузки и отображения данных о пассажирах в дереве
+    def load_passenger_data_view(self, passenger_tree):
+        passenger_cursor = self.passenger_db.cursor() # Создаем курсор для работы с базой данных
+        passenger_cursor.execute("SELECT * FROM passengers")  # Запрашиваем все данные о рейсах
+        for index, passenger in enumerate(passenger_cursor.fetchall()):
+            tag = 'evenrow' if index % 2 == 0 else 'oddrow'
+            passenger_tree.insert("", "end", values=passenger[1:], tags=(tag,))
+
+    # Метод для отображения статистики по пассажирам
+    def passenger_statistics(self): # Создаем новое окно для статистики
+        stats_window = tk.Toplevel(self.root)
+        stats_window.title("Статистика по пассажирам")
+        stats_window.config(bg=self.theme_color)
+
+        cursor = self.passenger_db.cursor() # Создаем курсор для работы с базой данных
+
+        # Общее количество пассажиров
+        cursor.execute("SELECT COUNT(*) FROM passengers")
+        total_passengers = cursor.fetchone()[0]
+
+        tk.Label(stats_window, text=f"Общее количество пассажиров: {total_passengers}", bg=self.theme_color,
+                 font=('Arial', 12)).pack(pady=10)
+
+        # Количество пассажиров по статусу
+        cursor.execute("SELECT status, COUNT(*) FROM passengers GROUP BY status")
+        status_counts = cursor.fetchall()
+
+        tk.Label(stats_window, text="Количество пассажиров по статусу:", bg=self.theme_color, font=('Arial', 12)).pack(
+            pady=10)
+        for status, count in status_counts:
+            tk.Label(stats_window, text=f"{status}: {count}", bg=self.theme_color, font=('Arial', 12)).pack()
+
+        # Поиск по дате
+        tk.Label(stats_window, text="Введите дату (YYYY-MM-DD):", bg=self.theme_color, font=('Arial', 12)).pack(pady=10)
+        date_entry = tk.Entry(stats_window, font=('Arial', 12), bg="#eaeaea")
+        date_entry.pack(pady=5)
+
+        # Метод для отображения количества пассажиров по указанной дате
+        def show_passengers_by_date():
+            date = date_entry.get()
+            cursor.execute("SELECT COUNT(*) FROM passengers WHERE departure_date=?", (date,))
+            count = cursor.fetchone()[0]
+            messagebox.showinfo("Результат", f"Количество пассажиров, вылетающих {date}: {count}")
+
+        # Кнопка для отображения количества пассажиров по дате
+        date_button = tk.Button(stats_window, text="Показать количество", command=show_passengers_by_date,
+                                bg="#4CAF50", fg="white", font=('Arial', 12))
+        date_button.pack(pady=10)
+
+        close_button = tk.Button(stats_window, text="Закрыть", command=stats_window.destroy,
+                                 bg="#FF0000", fg="white", font=('Arial', 12))
+        close_button.pack(pady=10)
+
+        stats_window.geometry("400x400")  # Установка размеров окна статистики
+
+    # Метод для экспорта данных о пассажирах в Excel
+    def export_passenger_data(self):
+        # Извлечь данные из базы данных
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute("SELECT id, fullname, birthdate, phone, email, passport, status, "
+                              "origin, destination, departure_date, flight_class, flight_id, "
+                              "added_by_manager_id, added_by_admin_id FROM passengers")
+        passengers = passenger_cursor.fetchall()
+
+        # Преобразовать данные в DataFrame
+        df = pd.DataFrame(passengers, columns=["ID", "ФИО", "Дата рождения", "Номер телефона",
+                                               "Email", "Номер паспорта", "Статус",
+                                               "Город/страна отправления", "Город/страна назначения",
+                                               "Дата вылета", "Класс", "Номер рейса", "ID менеджера", "ID администратора"])
+        excel_filename = "passengers_data.xlsx"
+        df.to_excel(excel_filename, index=False)
+
+        messagebox.showinfo("Успех", f"Данные пассажиров экспортированы в {excel_filename}")
+
+    def toggle_theme(self):
+        # Переключение между светлой и темной темами
+        self.current_theme = "dark" if self.current_theme == "light" else "light"
+        self.set_theme(self.current_theme)
+        self.create_menu()  # Update menu after theme change
+
+    def create_search_bar(self):
+        # Создаем панель поиска
+        search_frame = tk.Frame(self.root, bg=self.theme_color)
+        search_frame.pack(pady=10)
+
+        self.search_entry = tk.Entry(search_frame, width=30, font=('Arial', 12), bg="#eaeaea")
+        self.search_entry.pack(side=tk.LEFT, padx=10)
+
+        search_button = tk.Button(search_frame, text="Поиск пассажиров", command=self.search_passenger,
+                                  bg="#4CAF50", fg="white", font=('Arial', 12))
+        search_button.pack(side=tk.LEFT)
+
+        edit_button = tk.Button(search_frame, text="Редактировать", command=self.edit_passenger_window,
+                                bg="#FFA500", fg="white", font=('Arial', 12))
+        edit_button.pack(side=tk.LEFT)
+
+        delete_button = tk.Button(search_frame, text="Удалить", command=self.delete_passenger,
+                                  bg="#FF0000", fg="white", font=('Arial', 12))
+        delete_button.pack(side=tk.LEFT)
+
+    def create_passenger_tab(self):
+        # Создание вкладки для работы с пассажирами
+        self.passenger_frame = tk.Frame(self.root, bg=self.theme_color)
+        self.passenger_frame.pack(pady=10)
+        # Создание дерева для отображения информации о пассажирах
+        self.passenger_tree = ttk.Treeview(self.passenger_frame,
+                                           columns=("FullName", "BirthDate", "Phone", "Email", "Passport", "Status",
+                                                    "Origin", "Destination", "DepartureDate", "FlightClass"),
+                                           show='headings')
+        self.passenger_tree.heading("FullName", text="ФИО")
+        self.passenger_tree.heading("BirthDate", text="Дата рождения")
+        self.passenger_tree.heading("Phone", text="Номер телефона")
+        self.passenger_tree.heading("Email", text="Email")
+        self.passenger_tree.heading("Passport", text="Номер паспорта")
+        self.passenger_tree.heading("Status", text="Статус членства")
+        self.passenger_tree.heading("Origin", text="Город/страна отправления")
+        self.passenger_tree.heading("Destination", text="Город/страна назначения")
+        self.passenger_tree.heading("DepartureDate", text="Дата вылета")
+        self.passenger_tree.heading("FlightClass", text="Класс")
+
+        self.passenger_tree.tag_configure('evenrow', background="#d9f0d9")  # Color for even rows
+        self.passenger_tree.tag_configure('oddrow', background="#ffffff")  # Color for odd rows
+        self.passenger_tree.pack(fill=tk.BOTH, expand=True)
+
+        # Загружаем данные пассажиров сразу после создания вкладки
+        self.load_passenger_data()
+
+    def load_passenger_data(self): # Загрузка данных о пассажирах в дерево
+        for item in self.passenger_tree.get_children():
+            self.passenger_tree.delete(item)
+
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute("SELECT * FROM passengers")
+        for index, passenger in enumerate(passenger_cursor.fetchall()):
+            tag = 'evenrow' if index % 2 == 0 else 'oddrow'
+            self.passenger_tree.insert("", "end", values=passenger[1:], tags=(tag,))
+
+    def add_passenger_window(self):
+        # Создание окна для добавления нового пассажира
+        window = tk.Toplevel(self.root)
+        window.title("Добавить пассажира")
+        window.config(bg=self.theme_color)
+
+        tk.Label(window, text="ФИО", bg=self.theme_color, font=('Arial', 12)).grid(row=0, column=0, pady=5)
+        tk.Label(window, text="Дата рождения", bg=self.theme_color, font=('Arial', 12)).grid(row=1, column=0, pady=5)
+        tk.Label(window, text="Номер телефона", bg=self.theme_color, font=('Arial', 12)).grid(row=2, column=0, pady=5)
+        tk.Label(window, text="Email", bg=self.theme_color, font=('Arial', 12)).grid(row=3, column=0, pady=5)
+        tk.Label(window, text="Номер паспорта", bg=self.theme_color, font=('Arial', 12)).grid(row=4, column=0, pady=5)
+        tk.Label(window, text="Статус членства", bg=self.theme_color, font=('Arial', 12)).grid(row=5, column=0, pady=5)
+        tk.Label(window, text="Город/страна отправления", bg=self.theme_color, font=('Arial', 12)).grid(row=6, column=0,
+                                                                                                        pady=5)
+        tk.Label(window, text="Город/страна назначения", bg=self.theme_color, font=('Arial', 12)).grid(row=7, column=0,
+                                                                                                       pady=5)
+        tk.Label(window, text="Дата вылета", bg=self.theme_color, font=('Arial', 12)).grid(row=8, column=0, pady=5)
+        tk.Label(window, text="Класс", bg=self.theme_color, font=('Arial', 12)).grid(row=9, column=0, pady=5)
+        tk.Label(window, text="Номер рейса", bg=self.theme_color, font=('Arial', 12)).grid(row=9, column=0, pady=5)
+
+        self.fullname_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.birthday_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.phone_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.email_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.passport_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.status_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.origin_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.destination_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.departure_date_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.flight_class_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        # Размещение полей ввода в окно
+        self.fullname_entry.grid(row=0, column=1, pady=5)
+        self.birthday_entry.grid(row=1, column=1, pady=5)
+        self.phone_entry.grid(row=2, column=1, pady=5)
+        self.email_entry.grid(row=3, column=1, pady=5)
+        self.passport_entry.grid(row=4, column=1, pady=5)
+        self.status_entry.grid(row=5, column=1, pady=5)
+        self.origin_entry.grid(row=6, column=1, pady=5)
+        self.destination_entry.grid(row=7, column=1, pady=5)
+        self.departure_date_entry.grid(row=8, column=1, pady=5)
+        self.flight_class_entry.grid(row=9, column=1, pady=5)
+
+        tk.Label(window, text="Номер рейса", bg=self.theme_color, font=('Arial', 12)).grid(row=10, column=0, pady=5)
+        self.flight_id_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        self.flight_id_entry.grid(row=10, column=1, pady=5)
+
+        save_button = tk.Button(window, text="Сохранить", command=self.save_passenger,
+                                bg="#4CAF50", fg="white", font=('Arial', 12))
+        save_button.grid(row=11, column=0, columnspan=2, pady=10)
+
+        back_button = tk.Button(window, text="Назад", command=window.destroy, bg="#FF0000", fg="white",
+                                font=('Arial', 12))
+        back_button.grid(row=12, column=0, columnspan=2, pady=10)
+
+    def save_passenger(self):
+        # Метод для сохранения нового пассажира в базе данных
+        if (not self.fullname_entry.get() or
+                not self.birthday_entry.get() or
+                not self.phone_entry.get() or
+                not self.email_entry.get() or
+                not self.passport_entry.get() or
+                not self.status_entry.get() or
+                not self.origin_entry.get() or
+                not self.destination_entry.get() or
+                not self.departure_date_entry.get() or
+                not self.flight_class_entry.get() or
+                not self.flight_id_entry.get()):
+            messagebox.showerror("Ошибка", "Пожалуйста, заполните все поля.")
+            return
+        # Создаем кортеж с данными нового пассажира
+        new_passenger = (
+            self.fullname_entry.get(),
+            self.birthday_entry.get(),
+            self.phone_entry.get(),
+            self.email_entry.get(),
+            self.passport_entry.get(),
+            self.status_entry.get(),
+            self.origin_entry.get(),
+            self.destination_entry.get(),
+            self.departure_date_entry.get(),
+            self.flight_class_entry.get(),
+            self.flight_id_entry.get()  # Add flight number
+        )
+        # Сохраняем нового пассажира в базе данных
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute('''
+               INSERT INTO passengers (fullname, birthdate, phone, email, passport, status,
+                                       origin, destination, departure_date, flight_class, flight_id)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ''', new_passenger)
+        self.passenger_db.commit()
+
+        self.load_passenger_data()  # Reload passenger data
+        messagebox.showinfo("Успех", "Пассажир добавлен!")
+        self.clear_entries()
+
+    def clear_entries(self):
+        # Очищаем поля ввода
+        self.fullname_entry.delete(0, tk.END)
+        self.birthday_entry.delete(0, tk.END)
+        self.phone_entry.delete(0, tk.END)
+        self.email_entry.delete(0, tk.END)
+        self.passport_entry.delete(0, tk.END)
+        self.status_entry.delete(0, tk.END)
+        self.origin_entry.delete(0, tk.END)
+        self.destination_entry.delete(0, tk.END)
+        self.departure_date_entry.delete(0, tk.END)
+        self.flight_class_entry.delete(0, tk.END)
+        self.flight_id_entry.delete(0, tk.END)
+
+    def search_passenger(self):
+        # Поиск пассажиров по ФИО
+        search_term = self.search_entry.get().strip()
+        if not search_term:
+            return
+
+        for item in self.passenger_tree.get_children():
+            self.passenger_tree.delete(item)
+        # Выполняем поиск в базе данных
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute("SELECT * FROM passengers WHERE fullname LIKE ?", ("%{}%".format(search_term),))
+        results = passenger_cursor.fetchall()
+
+        print("Поиск по термину:", search_term)
+        print("Найденные результаты:", results)
+
+        for index, passenger in enumerate(results):
+            tag = 'evenrow' if index % 2 == 0 else 'oddrow'
+            self.passenger_tree.insert("", "end", values=passenger[1:], tags=(tag,))
+
+        if not results:
+            messagebox.showinfo("Результаты поиска", "Нет найденных пассажиров.")
+
+    def edit_passenger_window(self):
+        # Окно редактирования данных о пассажире
+        selected_item = self.passenger_tree.selection()
+        if selected_item:
+            passenger_id = self.passenger_tree.item(selected_item)["values"][0]  # Get passenger ID
+            passenger_data = self.passenger_tree.item(selected_item)["values"][1:]  # Get other data
+
+            window = tk.Toplevel(self.root)
+            window.title("Редактировать пассажира")
+            window.config(bg=self.theme_color)
+
+            labels = [
+                "ФИО",
+                "Дата рождения",
+                "Номер телефона",
+                "Email",
+                "Номер паспорта",
+                "Статус членства",
+                "Город/страна отправления",
+                "Город/страна назначения",
+                "Дата вылета",
+                "Класс",
+                "Номер рейса",
+            ]
+
+            self.entries = {}
+            for i, label in enumerate(labels): # Словарь для хранения полей ввода
+                tk.Label(window, text=label, bg=self.theme_color, font=('Arial', 12)).grid(row=i, column=0, pady=5)
+                entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+                entry.grid(row=i, column=1, pady=5)
+                self.entries[label] = entry
+
+            # Заполнение данных
+            if len(passenger_data) >= 11:
+                for i, field in enumerate(labels):
+                    self.entries[field].insert(0, passenger_data[i])
+
+            save_button = tk.Button(window, text="Сохранить изменения",
+                                    command=lambda: self.update_passenger(passenger_id),
+                                    bg="#4CAF50", fg="white", font=('Arial', 12))
+            save_button.grid(row=len(labels), column=0, columnspan=2, pady=10)
+
+            back_button = tk.Button(window, text="Назад", command=window.destroy, bg="#FF0000", fg="white",
+                                    font=('Arial', 12))
+            back_button.grid(row=len(labels) + 1, column=0, columnspan=2, pady=10)
+
+        else:
+            messagebox.showwarning("Предупреждение", "Выберите пассажира для редактирования.")
+
+    def update_passenger(self, passenger_id): # Обновление данных пассажира
+        updated_data = (
+            self.fullname_entry.get(),
+            self.birthday_entry.get(),
+            self.phone_entry.get(),
+            self.email_entry.get(),
+            self.passport_entry.get(),
+            self.status_entry.get(),
+            self.origin_entry.get(),
+            self.destination_entry.get(),
+            self.departure_date_entry.get(),
+            self.flight_class_entry.get(),
+            self.flight_id_entry.get(),
+            passenger_id  # ID for updating the record
+        )
+
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute('''
+            UPDATE passengers SET fullname=?, birthdate=?, phone=?, email=?, passport=?, status=?,
+            origin=?, destination=?, departure_date=?, flight_class=?, flight_id=?
+            WHERE id=?
+        ''', updated_data)
+        self.passenger_db.commit()
+
+        self.load_passenger_data()  # Reload passenger data
+        messagebox.showinfo("Успех", "Данные пассажира обновлены!")
+
+    def delete_passenger(self): # Удаление данных о пассажире
+        selected_item = self.passenger_tree.selection()
+        if selected_item:
+            passenger_id = self.passenger_tree.item(selected_item)["values"][0]  # Get passenger ID
+            if messagebox.askyesno("Подтверждение удаления", "Вы уверены, что хотите удалить этого пассажира?"):
+                passenger_cursor = self.passenger_db.cursor()
+                passenger_cursor.execute("DELETE FROM passengers WHERE id=?", (passenger_id,))
+                self.passenger_db.commit()
+                self.load_passenger_data()  # Reload passenger data
+                messagebox.showinfo("Успех", "Пассажир удален!")
+        else:
+            messagebox.showwarning("Предупреждение", "Выберите пассажира для удаления.")
+
+    def create_flight_tab(self): # Создание вкладки для работы с рейсами
+        self.flight_frame = tk.Frame(self.root, bg=self.theme_color)
+        self.flight_frame.pack(pady=10)
+        # Создание дерева для отображения информации о рейсах
+        self.flight_tree = ttk.Treeview(self.flight_frame,
+                                        columns=("FlightNumber", "DepartureTime", "ArrivalTime", "Origin",
+                                                 "Destination", "Status"),
+                                        show='headings')
+        self.flight_tree.heading("FlightNumber", text="Номер рейса")
+        self.flight_tree.heading("DepartureTime", text="Время вылета")
+        self.flight_tree.heading("ArrivalTime", text="Время прилета")
+        self.flight_tree.heading("Origin", text="Пункт отправления")
+        self.flight_tree.heading("Destination", text="Пункт назначения")
+        self.flight_tree.heading("Status", text="Статус рейса")
+
+        self.flight_tree.tag_configure('evenrow', background="#d9f0d9")
+        self.flight_tree.tag_configure('oddrow', background="#ffffff")
+        self.flight_tree.pack(fill=tk.BOTH, expand=True)
+
+        self.load_flight_data()
+
+    def load_flight_data(self):# Загрузка данных о рейсах в дерево
+        for item in self.flight_tree.get_children():
+            self.flight_tree.delete(item)
+
+        flight_cursor = self.passenger_db.cursor()
+        flight_cursor.execute("SELECT * FROM flights")
+        for index, flight in enumerate(flight_cursor.fetchall()):
+            tag = 'evenrow' if index % 2 == 0 else 'oddrow'
+            self.flight_tree.insert("", "end", values=flight[1:], tags=(tag,))
+
+    def add_flight_window(self):# Метод для открытия окна добавления нового рейса
+        window = tk.Toplevel(self.root)
+        window.title("Добавить рейс")
+        window.config(bg=self.theme_color)
+        # Метки для ввода информации о рейсе
+        tk.Label(window, text="Номер рейса", bg=self.theme_color, font=('Arial', 12)).grid(row=0, column=0, pady=5)
+        tk.Label(window, text="Время вылета", bg=self.theme_color, font=('Arial', 12)).grid(row=1, column=0, pady=5)
+        tk.Label(window, text="Время прилета", bg=self.theme_color, font=('Arial', 12)).grid(row=2, column=0, pady=5)
+        tk.Label(window, text="Пункт отправления", bg=self.theme_color, font=('Arial', 12)).grid(row=3, column=0,
+                                                                                                 pady=5)
+        tk.Label(window, text="Пункт назначения", bg=self.theme_color, font=('Arial', 12)).grid(row=4, column=0, pady=5)
+        tk.Label(window, text="Статус рейса", bg=self.theme_color, font=('Arial', 12)).grid(row=5, column=0, pady=5)
+
+        flight_number_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        departure_time_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        arrival_time_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        origin_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        destination_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        status_entry = tk.Entry(window, font=('Arial', 12), bg="#eaeaea")
+        # Размещение полей ввода в окно
+        flight_number_entry.grid(row=0, column=1, pady=5)
+        departure_time_entry.grid(row=1, column=1, pady=5)
+        arrival_time_entry.grid(row=2, column=1, pady=5)
+        origin_entry.grid(row=3, column=1, pady=5)
+        destination_entry.grid(row=4, column=1, pady=5)
+        status_entry.grid(row=5, column=1, pady=5)
+        # Кнопка для сохранения нового рейса
+        save_button = tk.Button(window, text="Сохранить", command=lambda: self.save_flight(
+            flight_number_entry.get(), departure_time_entry.get(),
+            arrival_time_entry.get(), origin_entry.get(),
+            destination_entry.get(), status_entry.get()),
+                                bg="#4CAF50", fg="white", font=('Arial', 12))
+        save_button.grid(row=6, column=0, columnspan=2, pady=10)
+
+        back_button = tk.Button(window, text="Назад", command=window.destroy, bg="#FF0000", fg="white",
+                                font=('Arial', 12))
+        back_button.grid(row=7, column=0, columnspan=2, pady=10)
+
+    def save_flight(self, flight_number, departure_time, arrival_time, origin, destination, status):
+        # Метод для сохранения нового рейса в базе данных
+        if not flight_number or not departure_time or not arrival_time or not origin or not destination or not status:
+            messagebox.showerror("Ошибка", "Пожалуйста, заполните все поля.")
+            return
+
+        flight_cursor = self.passenger_db.cursor()
+        flight_cursor.execute('''
+            INSERT INTO flights (flight_number, departure_time, arrival_time, origin, destination, status)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (flight_number, departure_time, arrival_time, origin, destination, status))
+        self.passenger_db.commit()
+
+        self.load_flight_data()  # Reload flight data
+        messagebox.showinfo("Успех", "Рейс добавлен!")
+
+    def view_flights(self): # Метод для отображения рейсов
+        self.flight_frame.pack_forget()  # Hide previous frame
+        self.create_flight_tab()  # Create new frame to display flights
+
+    def analytics_window(self):# Окно для создания отчетов
+        messagebox.showinfo("Аналитика", "Здесь будет аналитика!")
+
+    def reports_window(self):
+        report_window = tk.Toplevel(self.root)
+        report_window.title("Отчеты")
+        report_window.config(bg=self.theme_color)
+
+        tk.Label(report_window, text="Выберите тип отчета:", bg=self.theme_color, font=('Arial', 12)).pack(pady=20)
+
+    # Кнопка для общего числа пассажиров
+        btn_total_passengers = tk.Button(report_window, text="Общее количество пассажиров",
+                                        command=self.show_total_passengers_report, bg="#4CAF50", fg="white",
+                                        font=('Arial', 12))
+        btn_total_passengers.pack(pady=10)
+
+    # Кнопка для создания отчета по статусу
+        btn_status_report = tk.Button(report_window, text="Отчет по статусу",
+                                        command=self.show_status_report, bg="#4CAF50", fg="white",
+                                        font=('Arial', 12))
+        btn_status_report.pack(pady=10)
+
+    # Кнопка для создания отчета по рейсам
+        btn_flight_report = tk.Button(report_window, text="Отчет по рейсам",
+                                        command=self.show_flight_report, bg="#4CAF50", fg="white",
+                                        font=('Arial', 12))
+        btn_flight_report.pack(pady=10)
+
+    # Кнопка для закрытия окна
+        close_button = tk.Button(report_window, text="Закрыть", command=report_window.destroy,
+                                    bg="#FF0000", fg="white", font=('Arial', 12))
+        close_button.pack(pady=10)
+
+    def show_total_passengers_report(self):
+        # Метод для отображения общего количества пассажиров
+        cursor = self.passenger_db.cursor()
+        cursor.execute("SELECT COUNT(*) FROM passengers")
+        total = cursor.fetchone()[0]
+
+        messagebox.showinfo("Общее количество пассажиров", f"Общее количество пассажиров: {total}")
+
+
+    def generate_report_window(self):
+        # Окно для генерации отчетов
+        report_window = tk.Toplevel(self.root)
+        report_window.title("Сгенерировать отчет")
+        report_window.config(bg=self.theme_color)
+
+        tk.Label(report_window, text="Введите дату (YYYY-MM-DD):", bg=self.theme_color, font=('Arial', 12)).pack(
+            pady=10)
+
+        date_entry = tk.Entry(report_window, font=('Arial', 12), bg="#eaeaea")
+        date_entry.pack(pady=5)
+
+        def show_report():
+            # Метод для отображения отчета по данным
+            date = date_entry.get()
+            count = self.get_passenger_count_by_date(date)
+            messagebox.showinfo("Отчет", f"Количество пассажиров, которые летали {date}: {count}")
+
+        generate_button = tk.Button(report_window, text="Сгенерировать отчет", command=show_report,
+                                    bg="#4CAF50", fg="white", font=('Arial', 12))
+        generate_button.pack(pady=20)
+
+        back_button = tk.Button(report_window, text="Назад", command=report_window.destroy,
+                                bg="#FF0000", fg="white", font=('Arial', 12))
+        back_button.pack(pady=10)
+
+    def get_passenger_count_by_date(self, date):
+        # Получение количества пассажиров по указанной дате
+        passenger_cursor = self.passenger_db.cursor()
+        passenger_cursor.execute("SELECT COUNT(*) FROM passengers WHERE departure_date=?", (date,))
+        count = passenger_cursor.fetchone()[0]
+        return count
+
+
+if __name__ == "__main__":
+    root = tk.Tk() # Создаем корневой элемент приложения
+    root.withdraw()
+    app = PassengerApp(root) # Инициализируем приложение
+    root.mainloop() # Запускаем основной цикл приложения
